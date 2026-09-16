@@ -1,0 +1,22 @@
+# Standard Scott & Burgan 40 Fire Behavior Fuel Models (FBFM40) Mapping
+fuel_models:
+  GR2:
+    code: 102
+    name: "Low Load, Dry Climate Grass"
+    fuel_type: "grass"
+  GS2:
+    code: 122
+    name: "Moderate Load, Dry Climate Grass-Shrub"
+    fuel_type: "grass-shrub"
+  SH5:
+    code: 145
+    name: "High Load, Dry Climate Shrub (Chaparral)"
+    fuel_type: "shrub"
+  TL6:
+    code: 186
+    name: "Moderate Load Broadleaf/Conifer Litter"
+    fuel_type: "timber"
+  TU5:
+    code: 165
+    name: "Very High Load, Dry Climate Timber-Shrub"
+    fuel_type: "timber-understory"

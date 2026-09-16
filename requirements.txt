@@ -16,8 +16,10 @@ geopandas>=0.13.0
 shapely>=2.0.0
 pyproj>=3.5.0
 
-# AI / Deep Learning
+# AI / Deep Learning & Agents
 torch>=2.0.0
+google-adk>=0.1.0
+google-cloud-aiplatform>=1.38.0
 
 # Utilities & Visualization
 matplotlib>=3.7.0

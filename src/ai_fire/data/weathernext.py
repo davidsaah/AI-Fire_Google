@@ -116,7 +116,8 @@ class WeatherNextFetcher:
                 "Install them with: pip install earthengine-api xee"
             ) from err
 
-        if not ee.data._credentials:
+        is_init = getattr(ee.data, "is_initialized", lambda: getattr(ee.data, "_credentials", None) is not None)()
+        if not is_init:
             ee.Initialize(project=project)
 
         min_lon, min_lat, max_lon, max_lat = bbox
