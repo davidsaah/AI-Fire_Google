@@ -2,6 +2,15 @@ import functools
 import logging
 import os
 from pathlib import Path
+import sys
+
+# Ensure UTF-8 stdout/stderr on Windows console
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 from . import prompts
 from . import tools
@@ -84,6 +93,9 @@ def create_agent():
         tools.get_fire_danger_indices,
         tools.get_weathernext_fire_weather,
         tools.calculate_surface_fire_behavior,
+        tools.find_active_wildfires,
+        tools.get_wildfire_incident_details,
+        tools.launch_fire_spread_forecast,
     ]
 
     try:

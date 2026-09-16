@@ -312,6 +312,77 @@ predicted_toa = surrogate.predict(new_conditions)
 
 ---
 
+### 4. Autonomous Wildfire Agent (Google ADK & Gemini)
+
+AI-Fire includes an autonomous wildland fire intelligence agent built on the [Google Agent Development Kit (ADK)](https://google.github.io/agent-development-kit/) and powered by Google DeepMind's `gemini-flash-latest`. Modeled after Google Earth Engine Community patterns and aligned with the **Google.org AI Collaborative: Wildfires (AIC:W / Wildfire Commons)** framework.
+
+#### Multi-Source Active Detection & Spread Forecasting Pipeline
+
+```
+  +-----------------------+     +-----------------------+     +-------------------------+
+  |  NIFC WFIGS (5-min)   |     |   NASA FIRMS VIIRS    |     |  Google.org AIC:W       |
+  |  Authoritative Feeds  |     |  375m Satellite NRT   |     |  Wildfire Commons       |
+  +-----------+-----------+     +-----------+-----------+     +------------+------------+
+              |                             |                              |
+              +----------------------+------+------------------------------+
+                                     |
+                                     v
+                  +--------------------------------------+
+                  |      Unified Fire Detector           |
+                  |  - Active Incident Discovery         |
+                  |  - Spatial DBSCAN Hotspot Clustering |
+                  |  - Operational Perimeter Extraction  |
+                  +------------------+-------------------+
+                                     |
+                                     v
+                  +--------------------------------------+
+                  |    Space-Time Cube Builder (30m)     |
+                  |  - USGS 3DEP Elevation / Slopes      |
+                  |  - LANDFIRE FBFM40 Surface Fuels     |
+                  |  - WeatherNext 3 Wind Vectors (U, V) |
+                  +------------------+-------------------+
+                                     |
+                                     v
+                  +--------------------------------------+
+                  |   Pyretechnics Spread Simulator      |
+                  |  - Rothermel Rate of Spread (ROS)    |
+                  |  - Dynamic Alexander Ellipse Growth  |
+                  |  - Hourly Fire Isochrones (T+1h..Nh) |
+                  |  - Albini Spotting Distance (km)     |
+                  +------------------+-------------------+
+                                     |
+                                     v
+                  +--------------------------------------+
+                  |   Google ADK Wildfire Agent (Gemini) |
+                  |  - Executive Incident Bulletins      |
+                  |  - Evacuation & Suppression Advisories|
+                  +--------------------------------------+
+```
+
+#### Running the Agent via CLI
+
+Search active wildfires in a region (e.g. California, Texas, Oregon, or Nationwide) and launch a 6-hour spread forecast:
+
+```bash
+# Query active California wildfires and forecast the largest incident
+adk run src/ai_fire/agents/wildfire_risk_agent "Find active wildfires in California and launch a 6-hour spread forecast for the largest incident."
+
+# Run spread forecast for a specific named fire or coordinates
+adk run src/ai_fire/agents/wildfire_risk_agent "Launch a 12-hour fire spread forecast for the Line Fire."
+```
+
+#### Launching the Interactive Web UI
+
+Launch the ADK browser interface to chat with the agent, inspect active perimeters, and view hourly spread tables:
+
+```bash
+adk web src/ai_fire/agents/wildfire_risk_agent
+```
+
+Navigate to `http://127.0.0.1:8000` to interact with the agent in real time.
+
+---
+
 ## Data Ingestion & Pipeline
 
 AI-Fire is built to ingest standard public wildfire data layers:
