@@ -96,6 +96,7 @@ def create_agent():
         tools.find_active_wildfires,
         tools.get_wildfire_incident_details,
         tools.launch_fire_spread_forecast,
+        tools.refine_detected_fire_perimeter,
     ]
 
     try:

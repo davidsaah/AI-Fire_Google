@@ -23,6 +23,24 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
+# Check for Earth Engine availability
+try:
+    import ee
+    _EE_AVAILABLE = True
+except ImportError:
+    _EE_AVAILABLE = False
+    ee = None  # type: ignore
+
+
+def _is_ee_initialized() -> bool:
+    """Check if Earth Engine is initialized safely across API versions."""
+    if not _EE_AVAILABLE or ee is None:
+        return False
+    if hasattr(ee.data, "is_initialized"):
+        return bool(ee.data.is_initialized())
+    return getattr(ee.data, "_credentials", None) is not None
+
+
 # NIFC WFIGS Public ArcGIS REST Endpoints (refreshed every 5 minutes)
 NIFC_INCIDENTS_URL = (
     "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/"
@@ -48,6 +66,9 @@ class FireSource(str, Enum):
     NOAA_GOES = "NOAA_GOES"
     AICW_COMMONS = "AICW_COMMONS"
     GWIS = "GWIS"
+    EARTH_ENGINE_FIRMS = "EARTH_ENGINE_FIRMS"
+    SENTINEL2_SWIR = "SENTINEL2_SWIR"
+
 
 
 @dataclass
@@ -422,8 +443,180 @@ def cluster_firms_hotspots(
 
 
 # -------------------------------------------------------------------------
+# 2b. Google Earth Engine Active Fire & Flaming Front Engine
+# -------------------------------------------------------------------------
+
+def query_earth_engine_firms(
+    bbox: Tuple[float, float, float, float],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    min_t21_k: float = 325.0,
+    max_results: int = 50,
+) -> List[WildfireIncident]:
+    """Detect active thermal anomalies directly via Google Earth Engine FIRMS collection.
+
+    Queries ee.ImageCollection('FIRMS') over the specified bounding box (min_lon, min_lat, max_lon, max_lat)
+    and date window. Uses server-side thresholding on brightness temperature (T21 >= min_t21_k) and
+    vectorizes hot pixels directly into incident polygons without local raster downloads.
+
+    Args:
+        bbox: Geographic envelope (min_lon, min_lat, max_lon, max_lat).
+        start_date: Start date string ('YYYY-MM-DD'). Defaults to 48 hours ago.
+        end_date: End date string ('YYYY-MM-DD'). Defaults to today.
+        min_t21_k: Minimum brightness temperature in Kelvin (default: 325.0 K).
+        max_results: Maximum thermal clusters to return.
+
+    Returns:
+        List of WildfireIncident records parsed from Earth Engine feature collections.
+    """
+    if not _is_ee_initialized():
+        logger.debug("Earth Engine not initialized. Falling back to open FIRMS NRT CSV.")
+        return []
+
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        if not end_date:
+            end_date = now.strftime("%Y-%m-%d")
+        if not start_date:
+            start_date = (now - timedelta(days=2)).strftime("%Y-%m-%d")
+
+        min_lon, min_lat, max_lon, max_lat = bbox
+        roi = ee.Geometry.BBox(min_lon, min_lat, max_lon, max_lat)
+
+        firms_ic = (
+            ee.ImageCollection("FIRMS")
+            .filterBounds(roi)
+            .filterDate(start_date, end_date)
+        )
+
+        # Composite max brightness temperature and confidence
+        max_img = firms_ic.select(["T21", "confidence"]).reduce(ee.Reducer.max())
+        t21_band = max_img.select("T21_max")
+
+        # Threshold hot pixels (T21 >= min_t21_k)
+        hot_mask = t21_band.gte(min_t21_k)
+        hot_img = max_img.updateMask(hot_mask)
+
+        # Vectorize clusters into polygons (scale: 375m for VIIRS)
+        vectors = hot_img.reduceToVectors(
+            geometry=roi,
+            scale=375,
+            geometryType="polygon",
+            eightConnected=True,
+            labelProperty="hotspot_zone",
+            maxPixels=10000000,
+        ).limit(max_results)
+
+        features = vectors.getInfo().get("features", [])
+        incidents: List[WildfireIncident] = []
+
+        for idx, feat in enumerate(features):
+            geom = feat.get("geometry", {})
+            props = feat.get("properties", {})
+            count_val = float(props.get("count", 1))
+            est_acres = round(count_val * 35.0, 1)
+
+            incidents.append(
+                WildfireIncident(
+                    incident_id=f"EE-FIRMS-{idx+1:03d}",
+                    name=f"Earth Engine Thermal Cluster #{idx+1}",
+                    source=FireSource.EARTH_ENGINE_FIRMS.value,
+                    latitude=round(min_lat + (max_lat - min_lat) * 0.5, 4),
+                    longitude=round(min_lon + (max_lon - min_lon) * 0.5, 4),
+                    acres=est_acres,
+                    brightness_temp_k=round(float(props.get("T21_max", min_t21_k)), 1),
+                    confidence=str(props.get("confidence_max", "high")),
+                    discovery_date=end_date,
+                    geometry=geom,
+                )
+            )
+        return incidents
+    except Exception as e:
+        logger.warning("Earth Engine FIRMS detection query failed: %s", e)
+        return []
+
+
+def detect_sentinel2_flaming_front(
+    bbox: Tuple[float, float, float, float],
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Detect active flaming fire fronts at 20m resolution using Sentinel-2 SWIR in Earth Engine.
+
+    Scientific Principle (Wien's Displacement Law):
+    Biomass combustion at flaming temperatures (800K-1200K) produces peak thermal emissions in the
+    Short-Wave Infrared (SWIR) region (Band 12: 2.19 um, Band 11: 1.61 um). Because sub-micron smoke
+    particles do not scatter SWIR wavelengths, Sentinel-2 directly sees through dense smoke plumes
+    to delineate flaming front edges.
+
+    Algorithm:
+    1. Query COPERNICUS/S2_SR_HARMONIZED over ROI and date window.
+    2. Active Hotspot Ratio: B12 / B11 > 1.0 AND B12 > 0.35 (saturating flaming edge).
+    3. Vectorize flaming front mask at 20m resolution into GeoJSON lines/polygons.
+    """
+    if not _is_ee_initialized():
+        return {
+            "status": "Earth Engine not initialized",
+            "message": "Configure GOOGLE_CLOUD_PROJECT to run Sentinel-2 20m flaming front detection.",
+        }
+
+    try:
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        if not end_date:
+            end_date = now.strftime("%Y-%m-%d")
+        if not start_date:
+            start_date = (now - timedelta(days=5)).strftime("%Y-%m-%d")
+
+        min_lon, min_lat, max_lon, max_lat = bbox
+        roi = ee.Geometry.BBox(min_lon, min_lat, max_lon, max_lat)
+
+        s2_ic = (
+            ee.ImageCollection("COPERNICUS/S2_SR_HARMONIZED")
+            .filterBounds(roi)
+            .filterDate(start_date, end_date)
+            .sort("system:time_start", False)
+        )
+
+        s2_img = s2_ic.first()
+        if s2_img is None:
+            return {"status": "No recent Sentinel-2 overpass found for region"}
+
+        # SWIR bands: B12 (2.19 um, 20m), B11 (1.61 um, 20m)
+        swir12 = s2_img.select("B12").multiply(0.0001)
+        swir11 = s2_img.select("B11").multiply(0.0001)
+
+        # Flaming front condition: High B12 reflectance and B12 > B11 (characteristic of flaming thermal radiation)
+        flaming_mask = swir12.gt(0.35).And(swir12.divide(swir11).gt(1.0))
+
+        # Vectorize flaming edge
+        vectors = flaming_mask.updateMask(flaming_mask).reduceToVectors(
+            geometry=roi,
+            scale=20,
+            geometryType="polygon",
+            eightConnected=True,
+            maxPixels=5000000,
+        ).limit(10)
+
+        feats = vectors.getInfo().get("features", [])
+        return {
+            "status": "success",
+            "sensor": "Sentinel-2 MSI Level-2A (20m SWIR)",
+            "flaming_clusters_detected": len(feats),
+            "features": feats,
+        }
+    except Exception as e:
+        logger.warning("Sentinel-2 flaming front detection failed: %s", e)
+        return {"status": "error", "message": str(e)}
+
+
+# -------------------------------------------------------------------------
 # 3. Unified Discovery Router
 # -------------------------------------------------------------------------
+
 
 def find_active_wildfires(
     query_str: str = "US",
